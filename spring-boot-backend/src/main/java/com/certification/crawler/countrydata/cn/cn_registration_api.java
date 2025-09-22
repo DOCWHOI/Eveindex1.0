@@ -5,262 +5,298 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.*;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
 
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 中国上市医疗器械爬虫
- * 
- * API文档: https://open.bcpmdata.com/api/171.html
- * 接入指南: https://open.bcpmdata.com/guide/1.html
- * 
- * 功能：通过产品备案/注册证号实时调取全国药品上市信息数据
- * 覆盖：全国31个省级行政区、100+地市级药监部门
- * 
- * @author Generated
- * @date 2025-09-22
+ * 中国上市医疗器械数据解析器
+ * 从txt文件中读取JSON格式的中国医疗器械注册数据并解析
  */
 @Slf4j
 @Component
 public class cn_registration_api {
 
-    // API配置
-    private static final String API_KEY = "sk-acbc13b3d4ea353caa2142be3e22157a282dabbf";
-    private static final String BASE_URL = "https://open.bcpmdata.com";
-    private static final String LIST_ENDPOINT = "/instrument/general/v1/china_listed/list";
-    private static final String KEY_EXPIRY = "2025-09-22 23:59:59";
-    
-    private final RestTemplate restTemplate;
-    private final ObjectMapper objectMapper;
-
-    public cn_registration_api() {
-        this.restTemplate = new RestTemplate();
-        this.objectMapper = new ObjectMapper();
-    }
+    private static final String DATA_FILE_PATH = "src/main/java/com/certification/crawler/countrydata/cn/cn_registration_api.txt";
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
-     * 获取中国上市医疗器械列表
-     * 
-     * @param searchParams 搜索参数
-     * @param page 页码（默认每页10条）
-     * @return 医疗器械列表响应
+     * 从文件中解析中国医疗器械注册数据
      */
-    public ChinaListedResponse getChinaListedDevices(SearchParams searchParams, int page) {
-        log.info("开始获取中国上市医疗器械数据，页码: {}", page);
+    public ChinaListedResponse parseDataFromFile() {
+        log.info("开始从文件解析中国医疗器械注册数据: {}", DATA_FILE_PATH);
         
         try {
-            // 检查API Key是否过期
-            if (isApiKeyExpired()) {
-                log.error("API Key已过期，过期时间: {}", KEY_EXPIRY);
-                return null;
+            File dataFile = new File(DATA_FILE_PATH);
+            if (!dataFile.exists()) {
+                log.error("数据文件不存在: {}", DATA_FILE_PATH);
+                return createEmptyResponse("数据文件不存在");
             }
-
-            // 构建请求
-            String url = BASE_URL + LIST_ENDPOINT;
-            HttpHeaders headers = createHeaders();
             
-            // 构建请求体
-            Map<String, Object> requestBody = buildRequestBody(searchParams, page);
+            String fileContent = Files.readString(Paths.get(DATA_FILE_PATH));
+            if (fileContent == null || fileContent.trim().isEmpty()) {
+                log.error("数据文件为空");
+                return createEmptyResponse("数据文件为空");
+            }
             
-            HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(requestBody, headers);
+            log.info("成功读取文件，内容长度: {} 字符", fileContent.length());
             
-            log.info("发送请求到: {}", url);
-            log.info("请求参数: {}", objectMapper.writeValueAsString(requestBody));
+            // 清理内容
+            String cleanedContent = cleanJsonContent(fileContent);
             
-            // 发送请求
-            ResponseEntity<String> response = restTemplate.exchange(
-                url, 
-                HttpMethod.POST, 
-                requestEntity, 
-                String.class
-            );
+            // 解析JSON数据
+            ChinaListedResponse response = objectMapper.readValue(cleanedContent, ChinaListedResponse.class);
             
-            if (response.getStatusCode() == HttpStatus.OK) {
-                String responseBody = response.getBody();
-                log.info("API响应成功，响应长度: {}", responseBody != null ? responseBody.length() : 0);
-                
-                // 解析响应
-                ChinaListedResponse result = objectMapper.readValue(responseBody, ChinaListedResponse.class);
-                log.info("成功解析数据，共 {} 条记录", result.getTotal());
-                
-                return result;
+            if (response != null && response.getList() != null) {
+                log.info("成功解析数据，共 {} 条记录", response.getList().size());
+                return response;
             } else {
-                log.error("API请求失败，状态码: {}", response.getStatusCode());
-                return null;
+                log.error("解析结果为空");
+                return createEmptyResponse("解析结果为空");
             }
             
         } catch (Exception e) {
-            log.error("获取中国上市医疗器械数据失败: {}", e.getMessage(), e);
+            log.error("解析数据失败: {}", e.getMessage(), e);
+            return createEmptyResponse("解析数据失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 清理JSON内容
+     */
+    private String cleanJsonContent(String content) {
+        if (content == null) return "";
+        
+        // 移除HTML代码块标签
+        content = content.replaceAll("<code[^>]*>", "");
+        content = content.replaceAll("</code>", "");
+        content = content.replaceAll("```json", "");
+        content = content.replaceAll("```", "");
+        
+        // 查找JSON开始和结束位置
+        int jsonStart = content.indexOf("{");
+        if (jsonStart > 0) {
+            content = content.substring(jsonStart);
+        }
+        
+        int jsonEnd = content.lastIndexOf("}");
+        if (jsonEnd > 0 && jsonEnd < content.length() - 1) {
+            content = content.substring(0, jsonEnd + 1);
+        }
+        
+        return content.trim();
+    }
+
+    /**
+     * 创建空响应对象
+     */
+    private ChinaListedResponse createEmptyResponse(String message) {
+        ChinaListedResponse response = new ChinaListedResponse();
+        response.setList(new ArrayList<>());
+        response.setTotal(0);
+        response.setErrorMessage(message);
+        return response;
+    }
+
+    /**
+     * 根据产品名称过滤数据
+     */
+    public List<MedicalDevice> filterByProductName(String productName) {
+        ChinaListedResponse allData = parseDataFromFile();
+        if (allData == null || allData.getList() == null) {
+            return new ArrayList<>();
+        }
+        
+        return allData.getList().stream()
+            .filter(device -> device.getProductName() != null && 
+                            device.getProductName().toLowerCase().contains(productName.toLowerCase()))
+            .toList();
+    }
+
+    /**
+     * 获取数据统计信息
+     */
+    public Map<String, Object> getDataStatistics() {
+        ChinaListedResponse allData = parseDataFromFile();
+        Map<String, Object> stats = new HashMap<>();
+        
+        if (allData == null || allData.getList() == null) {
+            stats.put("totalCount", 0);
+            stats.put("error", allData != null ? allData.getErrorMessage() : "解析失败");
+            return stats;
+        }
+        
+        List<MedicalDevice> devices = allData.getList();
+        stats.put("totalCount", devices.size());
+        
+        // 按管理类别统计
+        Map<String, Long> categoryStats = devices.stream()
+            .collect(java.util.stream.Collectors.groupingBy(
+                device -> device.getCategory() != null ? device.getCategory() : "未知",
+                java.util.stream.Collectors.counting()
+            ));
+        stats.put("categoryStats", categoryStats);
+        
+        // 按国产/进口统计
+        Map<String, Long> typeStats = devices.stream()
+            .collect(java.util.stream.Collectors.groupingBy(
+                device -> device.getType() != null ? device.getType() : "未知",
+                java.util.stream.Collectors.counting()
+            ));
+        stats.put("typeStats", typeStats);
+        
+        // 按省份统计
+        Map<String, Long> provinceStats = devices.stream()
+            .collect(java.util.stream.Collectors.groupingBy(
+                device -> device.getProvince() != null ? device.getProvince() : "未知",
+                java.util.stream.Collectors.counting()
+            ));
+        stats.put("provinceStats", provinceStats);
+        
+        // 按产品状态统计
+        Map<String, Long> stateStats = devices.stream()
+            .collect(java.util.stream.Collectors.groupingBy(
+                device -> device.getProductState() != null ? device.getProductState() : "未知",
+                java.util.stream.Collectors.counting()
+            ));
+        stats.put("stateStats", stateStats);
+        
+        return stats;
+    }
+
+    /**
+     * 打印设备信息
+     */
+    public void printDeviceInfo(MedicalDevice device) {
+        if (device == null) return;
+        
+        log.info("=== 医疗器械信息 ===");
+        log.info("产品名称: {}", device.getProductName());
+        log.info("注册证号: {}", device.getRegistrationNumber());
+        log.info("注册人: {}", device.getManufacturerRe());
+        log.info("管理类别: {}", device.getCategory());
+        log.info("分类: {}", device.getClassification());
+        log.info("国产/进口: {}", device.getType());
+        log.info("器械状态: {}", device.getProductState());
+        log.info("省份: {}", device.getProvince());
+        log.info("城市: {}", device.getCity());
+        log.info("适用范围: {}", cleanHtmlTags(device.getScopeAndUse()));
+        log.info("==================");
+    }
+
+    /**
+     * 将解析结果导出为CSV文件
+     */
+    public String exportToCsv() {
+        log.info("开始导出数据到CSV文件");
+        
+        try {
+            ChinaListedResponse response = parseDataFromFile();
+            if (response == null || response.getList() == null || response.getList().isEmpty()) {
+                log.error("没有数据可导出");
+                return null;
+            }
+            
+            // 生成CSV文件名
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String csvFileName = "china_medical_devices_" + timestamp + ".csv";
+            String csvFilePath = "output/" + csvFileName;
+            
+            // 创建输出目录
+            File outputDir = new File("output");
+            if (!outputDir.exists()) {
+                outputDir.mkdirs();
+            }
+            
+            // 写入CSV文件
+            try (FileWriter writer = new FileWriter(csvFilePath, java.nio.charset.StandardCharsets.UTF_8)) {
+                // 写入BOM以支持Excel正确显示中文
+                writer.write('\ufeff');
+                
+                // 写入CSV标题行
+                writer.append("序号,产品名称,注册证号,注册人,管理类别,分类,国产进口,适用范围,批准日期,有效期至,器械状态,是否纳入医保,省份,城市,区县\n");
+                
+                // 写入数据行
+                List<MedicalDevice> devices = response.getList();
+                for (int i = 0; i < devices.size(); i++) {
+                    MedicalDevice device = devices.get(i);
+                    
+                    writer.append(String.valueOf(i + 1)).append(",");
+                    writer.append(escapeCsvField(device.getProductName())).append(",");
+                    writer.append(escapeCsvField(device.getRegistrationNumber())).append(",");
+                    writer.append(escapeCsvField(device.getManufacturerRe())).append(",");
+                    writer.append(escapeCsvField(device.getCategory())).append(",");
+                    writer.append(escapeCsvField(device.getClassification())).append(",");
+                    writer.append(escapeCsvField(device.getType())).append(",");
+                    writer.append(escapeCsvField(cleanHtmlTags(device.getScopeAndUse()))).append(",");
+                    writer.append(escapeCsvField(device.getApprovalDate())).append(",");
+                    writer.append(escapeCsvField(device.getValidUntil())).append(",");
+                    writer.append(escapeCsvField(device.getProductState())).append(",");
+                    writer.append(escapeCsvField(device.getWhetherYibao())).append(",");
+                    writer.append(escapeCsvField(device.getProvince())).append(",");
+                    writer.append(escapeCsvField(device.getCity())).append(",");
+                    writer.append(escapeCsvField(device.getRegion())).append("\n");
+                }
+            }
+            
+            log.info("CSV文件导出成功: {}", csvFilePath);
+            log.info("导出记录数: {}", response.getList().size());
+            
+            return csvFilePath;
+            
+        } catch (IOException e) {
+            log.error("CSV文件导出失败: {}", e.getMessage(), e);
             return null;
         }
     }
 
     /**
-     * 批量获取所有数据
+     * 转义CSV字段
      */
-    public ChinaListedResponse getAllChinaListedDevices(SearchParams searchParams, int maxPages) {
-        log.info("开始批量获取中国上市医疗器械数据，最大页数: {}", maxPages);
-        
-        ChinaListedResponse allResults = new ChinaListedResponse();
-        allResults.setList(new java.util.ArrayList<>());
-        
-        int currentPage = 1;
-        int totalProcessed = 0;
-        
-        while (currentPage <= maxPages) {
-            ChinaListedResponse pageResult = getChinaListedDevices(searchParams, currentPage);
-            
-            if (pageResult == null || pageResult.getList() == null || pageResult.getList().isEmpty()) {
-                log.info("第 {} 页没有数据，停止获取", currentPage);
-                break;
-            }
-            
-            allResults.getList().addAll(pageResult.getList());
-            allResults.setTotal(pageResult.getTotal());
-            
-            totalProcessed += pageResult.getList().size();
-            log.info("已处理第 {} 页，本页 {} 条，累计 {} 条", 
-                currentPage, pageResult.getList().size(), totalProcessed);
-            
-            if (pageResult.getList().size() < 10) {
-                break;
-            }
-            
-            currentPage++;
-            
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
+    private String escapeCsvField(String field) {
+        if (field == null) {
+            return "";
         }
         
-        log.info("批量获取完成，总计 {} 条记录", totalProcessed);
-        return allResults;
-    }
-
-    /**
-     * 根据产品名称搜索
-     */
-    public ChinaListedResponse searchByProductName(String productName, int page) {
-        SearchParams params = new SearchParams();
-        params.setProductName(productName);
-        return getChinaListedDevices(params, page);
-    }
-
-    /**
-     * 测试API连接
-     */
-    public boolean testApiConnection() {
-        log.info("测试API连接...");
-        try {
-            SearchParams params = new SearchParams();
-            ChinaListedResponse response = getChinaListedDevices(params, 1);
-            boolean success = response != null && response.getList() != null;
-            log.info("API连接测试结果: {}", success ? "成功" : "失败");
-            return success;
-        } catch (Exception e) {
-            log.error("API连接测试失败: {}", e.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * 创建HTTP请求头
-     */
-    private HttpHeaders createHeaders() {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set("Authorization", "Bearer " + API_KEY);
-        headers.set("User-Agent", "ChinaRegistrationCrawler/1.0");
-        return headers;
-    }
-
-    /**
-     * 构建请求体
-     */
-    private Map<String, Object> buildRequestBody(SearchParams searchParams, int page) {
-        Map<String, Object> requestBody = new HashMap<>();
+        // 移除换行符
+        field = field.replaceAll("[\r\n]+", " ");
         
-        if (searchParams != null) {
-            Map<String, Object> search = new HashMap<>();
-            
-            if (searchParams.getProductName() != null) {
-                search.put("product_name", searchParams.getProductName());
-            }
-            if (searchParams.getManufacturerRe() != null) {
-                search.put("manufacturer_re", searchParams.getManufacturerRe());
-            }
-            if (searchParams.getRegistrationNumberRemark() != null) {
-                search.put("registration_number_remark", searchParams.getRegistrationNumberRemark());
-            }
-            if (searchParams.getCategory() != null) {
-                search.put("category", searchParams.getCategory());
-            }
-            if (searchParams.getType() != null) {
-                search.put("type", searchParams.getType());
-            }
-            
-            if (!search.isEmpty()) {
-                requestBody.put("search", search);
-            }
+        // 如果包含逗号、引号或换行，需要用引号包围并转义内部引号
+        if (field.contains(",") || field.contains("\"") || field.contains("\n")) {
+            field = "\"" + field.replace("\"", "\"\"") + "\"";
         }
         
-        requestBody.put("page", page);
-        return requestBody;
+        return field;
     }
 
     /**
-     * 检查API Key是否过期
+     * 清理HTML标签
      */
-    private boolean isApiKeyExpired() {
-        try {
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-            LocalDateTime expiryTime = LocalDateTime.parse(KEY_EXPIRY, formatter);
-            return LocalDateTime.now().isAfter(expiryTime);
-        } catch (Exception e) {
-            log.warn("无法解析API Key过期时间，假设未过期");
-            return false;
-        }
+    private String cleanHtmlTags(String text) {
+        if (text == null) return "";
+        return text.replaceAll("<[^>]+>", "").trim();
     }
 
     // ==================== 数据模型类 ====================
 
-    /**
-     * 搜索参数类
-     */
-    @Data
-    public static class SearchParams {
-        private String productName;              // 产品名称
-        private String manufacturerRe;           // 注册/备案人名称
-        private String registrationNumberRemark; // 产品备案/注册证号
-        private String category;                 // 管理类别：Ⅱ、Ⅲ
-        private String type;                     // 国产/进口：国产、进口
-        private String productState;             // 器械状态：已注销、已过期、有效
-        private String whetherYibao;             // 是否纳入医保：是、否
-    }
-
-    /**
-     * API响应类
-     */
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ChinaListedResponse {
         private List<MedicalDevice> list;
         private Integer total;
+        private String errorMessage;
     }
 
-    /**
-     * 医疗器械数据类
-     */
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class MedicalDevice {
@@ -272,16 +308,56 @@ public class cn_registration_api {
         @JsonProperty("registration_number")
         private String registrationNumber;
         
+        @JsonProperty("registration_number_remark")
+        private String registrationNumberRemark;
+        
+        @JsonProperty("category_year")
+        private String categoryYear;
+        
+        private String classification;
+        
+        @JsonProperty("first_category")
+        private String firstCategory;
+        
+        @JsonProperty("secondary_category")
+        private String secondaryCategory;
+        
+        private String category;
+        
         @JsonProperty("manufacturer_re")
         private String manufacturerRe;
         
-        private String category;
+        @JsonProperty("registrant_domicile")
+        private String registrantDomicile;
+        
+        @JsonProperty("production_address")
+        private String productionAddress;
+        
+        @JsonProperty("product_storage_conditions_and_expiry_date")
+        private String productStorageConditionsAndExpiryDate;
         
         @JsonProperty("scope_and_use")
         private String scopeAndUse;
         
+        @JsonProperty("agent_name")
+        private String agentName;
+        
+        private String change;
+        
+        @JsonProperty("model_specification")
+        private String modelSpecification;
+        
+        @JsonProperty("structure_and_components")
+        private String structureAndComponents;
+        
+        @JsonProperty("approval_department")
+        private String approvalDepartment;
+        
         @JsonProperty("approval_date")
         private String approvalDate;
+        
+        @JsonProperty("effective_date")
+        private String effectiveDate;
         
         @JsonProperty("valid_until")
         private String validUntil;
@@ -291,31 +367,91 @@ public class cn_registration_api {
         @JsonProperty("whether_yibao")
         private String whetherYibao;
         
-        @JsonProperty("product_state")
-        private String productState;
+        private String remark;
+        
+        @JsonProperty("registration_category")
+        private String registrationCategory;
         
         private String province;
         private String city;
         private String region;
+        private String classify;
+        
+        @JsonProperty("product_state")
+        private String productState;
+        
+        @JsonProperty("certificate_state")
+        private String certificateState;
+        
+        @JsonProperty("prioritize_innovation")
+        private String prioritizeInnovation;
     }
 
     /**
-     * 打印设备信息（用于调试）
+     * 主函数 - 用于测试和导出数据
      */
-    public void printDeviceInfo(MedicalDevice device) {
-        if (device == null) return;
+    public static void main(String[] args) {
+        System.out.println("=== 中国医疗器械注册数据解析器测试 ===");
         
-        log.info("=== 医疗器械信息 ===");
-        log.info("产品名称: {}", device.getProductName());
-        log.info("注册证号: {}", device.getRegistrationNumber());
-        log.info("注册人: {}", device.getManufacturerRe());
-        log.info("管理类别: {}", device.getCategory());
-        log.info("国产/进口: {}", device.getType());
-        log.info("适用范围: {}", device.getScopeAndUse());
-        log.info("批准日期: {}", device.getApprovalDate());
-        log.info("有效期至: {}", device.getValidUntil());
-        log.info("器械状态: {}", device.getProductState());
-        log.info("是否纳入医保: {}", device.getWhetherYibao());
-        log.info("==================");
+        cn_registration_api parser = new cn_registration_api();
+        
+        try {
+            // 1. 测试数据解析
+            System.out.println("\n1. 测试数据文件解析...");
+            ChinaListedResponse response = parser.parseDataFromFile();
+            
+            if (response != null && response.getList() != null) {
+                System.out.println("✅ 数据解析成功！");
+                System.out.println("📊 总记录数: " + response.getList().size());
+                
+                // 2. 显示统计信息
+                System.out.println("\n2. 数据统计信息:");
+                Map<String, Object> stats = parser.getDataStatistics();
+                System.out.println("📈 统计结果: " + stats);
+                
+                // 3. 显示第一条记录
+                if (!response.getList().isEmpty()) {
+                    System.out.println("\n3. 第一条记录示例:");
+                    parser.printDeviceInfo(response.getList().get(0));
+                }
+                
+                // 4. 测试搜索功能
+                System.out.println("\n4. 测试搜索功能:");
+                List<MedicalDevice> skinDevices = parser.filterByProductName("皮肤");
+                System.out.println("🔍 搜索'皮肤'相关产品: " + skinDevices.size() + " 条");
+                
+                if (!skinDevices.isEmpty()) {
+                    System.out.println("搜索结果示例:");
+                    for (int i = 0; i < Math.min(3, skinDevices.size()); i++) {
+                        MedicalDevice device = skinDevices.get(i);
+                        System.out.println("  " + (i+1) + ". " + device.getProductName() + 
+                                         " - " + device.getRegistrationNumber() + 
+                                         " - " + device.getManufacturerRe());
+                    }
+                }
+                
+                // 5. 导出CSV文件
+                System.out.println("\n5. 导出CSV文件...");
+                String csvPath = parser.exportToCsv();
+                if (csvPath != null) {
+                    System.out.println("✅ CSV文件导出成功: " + csvPath);
+                    System.out.println("📁 文件绝对路径: " + new File(csvPath).getAbsolutePath());
+                } else {
+                    System.out.println("❌ CSV文件导出失败");
+                }
+                
+            } else {
+                System.out.println("❌ 数据解析失败");
+                if (response != null) {
+                    System.out.println("错误信息: " + response.getErrorMessage());
+                }
+            }
+            
+        } catch (Exception e) {
+            System.err.println("❌ 测试过程中发生异常: " + e.getMessage());
+            e.printStackTrace();
+        }
+        
+        System.out.println("\n=== 测试完成 ===");
     }
 }

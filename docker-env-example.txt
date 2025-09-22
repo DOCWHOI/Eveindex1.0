@@ -2,6 +2,13 @@
 # 复制此文件为 .env.prod 并填入真实配置
 
 # ================================
+# 构建信息
+# ================================
+BUILD_DATE=2024-09-22T10:00:00Z
+VCS_REF=abc1234
+APP_VERSION=1.0.0
+
+# ================================
 # 数据库配置
 # ================================
 MYSQL_ROOT_PASSWORD=your_strong_root_password_here_2024
@@ -31,7 +38,7 @@ MAIL_PASSWORD=your_email_password_here
 # 应用配置
 # ================================
 APP_ENV=production
-APP_VERSION=1.0.0
+APP_NAME=certification-monitor
 
 # ================================
 # 安全配置
@@ -44,9 +51,51 @@ JWT_SECRET=your_jwt_secret_key_here_very_long_and_secure_2024
 # ================================
 # 是否启用监控
 MONITORING_ENABLED=true
+GRAFANA_PASSWORD=your_grafana_password_here
 
 # ================================
 # 备份配置
 # ================================
 # 数据库备份保留天数
 BACKUP_RETENTION_DAYS=30
+
+# ================================
+# SSL配置
+# ================================
+# SSL证书路径（如果使用自定义证书）
+SSL_CERT_PATH=/etc/nginx/ssl/cert.pem
+SSL_KEY_PATH=/etc/nginx/ssl/key.pem
+
+# ================================
+# 域名配置
+# ================================
+# 应用域名
+APP_DOMAIN=your-domain.com
+PMA_ABSOLUTE_URI=https://your-domain.com:8081/
+
+# ================================
+# 性能配置
+# ================================
+# 最大内存使用
+MAX_MEMORY=2g
+# 最大CPU使用
+MAX_CPU=2.0
+
+# ================================
+# 日志配置
+# ================================
+# 日志级别
+LOG_LEVEL=INFO
+# 日志保留天数
+LOG_RETENTION_DAYS=30
+
+# ================================
+# 开发环境配置（仅开发环境使用）
+# ================================
+# 开发环境数据库密码
+DEV_DB_PASSWORD=dev123
+# 开发环境Redis密码（可为空）
+DEV_REDIS_PASSWORD=
+# 开发环境API密钥（可为空）
+DEV_VOLCENGINE_ACCESS_KEY=
+DEV_VOLCENGINE_SECRET_KEY=

@@ -11,20 +11,27 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-common_db}
       MYSQL_USER: ${MYSQL_USER:-cert_user}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-cert_password}
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./database:/docker-entrypoint-initdb.d
+      - ./database:/docker-entrypoint-initdb.d:ro
+      - mysql_logs:/var/log/mysql
     command: 
       - --default-authentication-plugin=mysql_native_password
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
-      - --innodb-buffer-pool-size=512M
-      - --max-connections=200
-      - --innodb-log-file-size=128M
-      - --innodb-flush-log-at-trx-commit=2
+      - --innodb-buffer-pool-size=1G
+      - --max-connections=500
+      - --innodb-log-file-size=256M
+      - --innodb-flush-log-at-trx-commit=1
       - --innodb-flush-method=O_DIRECT
+      - --slow-query-log=1
+      - --slow-query-log-file=/var/log/mysql/slow.log
+      - --long-query-time=2
+      - --log-error=/var/log/mysql/error.log
     networks:
       - cert_network
     healthcheck:
@@ -32,17 +39,39 @@ services:
       timeout: 20s
       retries: 10
       interval: 30s
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
 
   # Redis缓存
   redis:
     image: redis:7-alpine
     container_name: cert_redis_prod
     restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+      - redis_logs:/var/log/redis
+    command: >
+      redis-server 
+      --appendonly yes 
+      --requirepass ${REDIS_PASSWORD:-redis123}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --loglevel notice
+      --logfile /var/log/redis/redis.log
     networks:
       - cert_network
     healthcheck:
@@ -50,17 +79,29 @@ services:
       timeout: 3s
       retries: 5
       interval: 10s
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
 
   # Spring Boot后端
   backend:
     build:
       context: ./spring-boot-backend
       dockerfile: Dockerfile
+      args:
+        - BUILD_DATE=${BUILD_DATE:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}
+        - VCS_REF=${VCS_REF:-$(git rev-parse --short HEAD)}
     container_name: cert_backend_prod
     restart: unless-stopped
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-common_db}?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=GMT%2B8
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-common_db}?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=GMT%2B8&allowPublicKeyRetrieval=true
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-cert_user}
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:-cert_password}
       SPRING_DATA_REDIS_HOST: redis
@@ -70,22 +111,34 @@ services:
       VOLCENGINE_SECRET_KEY: ${VOLCENGINE_SECRET_KEY}
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}
-      # JVM参数
+      # JVM参数优化
       JAVA_OPTS: >-
-        -Xms512m 
-        -Xmx1024m 
+        -Xms1g 
+        -Xmx2g 
         -XX:+UseG1GC 
         -XX:G1HeapRegionSize=16m 
         -XX:+UseStringDeduplication
         -XX:+OptimizeStringConcat
         -XX:+UseCompressedOops
+        -XX:+UseContainerSupport
+        -XX:MaxRAMPercentage=75.0
         -Djava.awt.headless=true
         -Dfile.encoding=UTF-8
         -Duser.timezone=Asia/Shanghai
+        -Djava.security.egd=file:/dev/./urandom
+        -Dspring.profiles.active=docker
+        -Dlogging.level.com.certification=INFO
+        -Dlogging.level.org.springframework.web=WARN
+        -Dlogging.level.org.hibernate.SQL=WARN
+      # 应用配置
+      APP_NAME: certification-monitor
+      APP_VERSION: ${APP_VERSION:-1.0.0}
+      APP_ENV: production
     ports:
       - "8080:8080"
     volumes:
       - backend_logs:/app/logs
+      - backend_data:/app/data
       - ./chrome-portable:/app/chrome-portable:ro
     depends_on:
       mysql:
@@ -98,18 +151,39 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 120s
       interval: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
 
   # Vue前端
   frontend:
     build:
       context: ./vue-frontend
       dockerfile: Dockerfile
+      args:
+        - BUILD_DATE=${BUILD_DATE:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}
+        - VCS_REF=${VCS_REF:-$(git rev-parse --short HEAD)}
     container_name: cert_frontend_prod
     restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      APP_VERSION: ${APP_VERSION:-1.0.0}
     ports:
       - "80:80"
+    volumes:
+      - frontend_logs:/var/log/nginx
     depends_on:
       backend:
         condition: service_healthy
@@ -120,8 +194,22 @@ services:
       timeout: 5s
       retries: 3
       interval: 30s
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
-  # phpMyAdmin (可选，用于数据库管理)
+  # phpMyAdmin (数据库管理)
   phpmyadmin:
     image: phpmyadmin/phpmyadmin:latest
     container_name: cert_phpmyadmin_prod
@@ -132,6 +220,8 @@ services:
       PMA_USER: root
       PMA_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password123}
       UPLOAD_LIMIT: 100M
+      PMA_ARBITRARY: 1
+      PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-http://localhost:8081/}
     ports:
       - "8081:80"
     depends_on:
@@ -139,16 +229,26 @@ services:
         condition: service_healthy
     networks:
       - cert_network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
 
-  # Nginx反向代理 (可选)
+  # Nginx反向代理 (SSL终端)
   nginx:
     image: nginx:alpine
     container_name: cert_nginx_prod
     restart: unless-stopped
     ports:
       - "443:443"
+      - "80:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./ssl:/etc/nginx/ssl:ro
       - nginx_logs:/var/log/nginx
     depends_on:
@@ -158,15 +258,98 @@ services:
       - cert_network
     profiles:
       - ssl
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # 监控服务 (Prometheus + Grafana)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cert_prometheus_prod
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - cert_network
+    profiles:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cert_grafana_prod
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_USERS_ALLOW_SIGN_UP: false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - cert_network
+    profiles:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
 
 volumes:
   mysql_data:
     driver: local
+  mysql_logs:
+    driver: local
   redis_data:
+    driver: local
+  redis_logs:
     driver: local
   backend_logs:
     driver: local
+  backend_data:
+    driver: local
+  frontend_logs:
+    driver: local
   nginx_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local
 
 networks:
@@ -175,3 +358,4 @@ networks:
     ipam:
       config:
         - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1

@@ -1,9 +1,6 @@
 package com.certification.controller;
 
 import com.certification.crawler.countrydata.cn.cn_registration_api;
-import com.certification.crawler.countrydata.cn.cn_registration_api.ChinaListedResponse;
-import com.certification.crawler.countrydata.cn.cn_registration_api.MedicalDevice;
-import com.certification.crawler.countrydata.cn.cn_registration_api.SearchParams;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -12,13 +9,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * 中国医疗器械注册数据控制器
- * 
- * 提供中国上市医疗器械数据的API接口
  */
 @Slf4j
 @RestController
@@ -30,28 +27,35 @@ public class ChinaRegistrationController {
     private cn_registration_api chinaRegistrationApi;
 
     /**
-     * 测试API连接
+     * 测试数据文件解析
      */
     @GetMapping("/test")
-    @Operation(summary = "测试API连接", description = "测试中国医疗器械注册API是否可用")
-    public ResponseEntity<Map<String, Object>> testConnection() {
-        log.info("测试中国医疗器械注册API连接");
+    @Operation(summary = "测试数据文件解析", description = "测试从txt文件解析中国医疗器械数据")
+    public ResponseEntity<Map<String, Object>> testDataParsing() {
+        log.info("测试中国医疗器械数据文件解析");
         
         Map<String, Object> result = new HashMap<>();
         
         try {
-            boolean isConnected = chinaRegistrationApi.testApiConnection();
+            cn_registration_api.ChinaListedResponse response = chinaRegistrationApi.parseDataFromFile();
             
-            result.put("success", isConnected);
-            result.put("message", isConnected ? "API连接成功" : "API连接失败");
-            result.put("apiStats", chinaRegistrationApi.getApiStats());
+            if (response != null && response.getList() != null && !response.getList().isEmpty()) {
+                result.put("success", true);
+                result.put("message", "数据解析成功");
+                result.put("totalRecords", response.getList().size());
+                result.put("sampleData", response.getList().get(0));
+                result.put("statistics", chinaRegistrationApi.getDataStatistics());
+            } else {
+                result.put("success", false);
+                result.put("message", response != null ? response.getErrorMessage() : "数据解析失败");
+            }
             
             return ResponseEntity.ok(result);
             
         } catch (Exception e) {
-            log.error("API连接测试失败: {}", e.getMessage(), e);
+            log.error("数据解析测试失败: {}", e.getMessage(), e);
             result.put("success", false);
-            result.put("message", "API连接测试异常: " + e.getMessage());
+            result.put("message", "数据解析测试异常: " + e.getMessage());
             return ResponseEntity.ok(result);
         }
     }
@@ -62,30 +66,28 @@ public class ChinaRegistrationController {
     @GetMapping("/search/product")
     @Operation(summary = "根据产品名称搜索", description = "根据产品名称搜索中国上市医疗器械")
     public ResponseEntity<Map<String, Object>> searchByProductName(
-            @Parameter(description = "产品名称") @RequestParam String productName,
-            @Parameter(description = "页码，从1开始") @RequestParam(defaultValue = "1") int page) {
+            @Parameter(description = "产品名称") @RequestParam String productName) {
         
-        log.info("根据产品名称搜索医疗器械: {}, 页码: {}", productName, page);
+        log.info("根据产品名称搜索医疗器械: {}", productName);
         
         Map<String, Object> result = new HashMap<>();
         
         try {
-            ChinaListedResponse response = chinaRegistrationApi.searchByProductName(productName, page);
+            List<cn_registration_api.MedicalDevice> devices = chinaRegistrationApi.filterByProductName(productName);
             
-            if (response != null) {
+            if (devices != null && !devices.isEmpty()) {
                 result.put("success", true);
-                result.put("data", response.getList());
-                result.put("total", response.getTotal());
-                result.put("page", page);
-                result.put("message", String.format("找到 %d 条相关记录", response.getTotal()));
+                result.put("data", devices);
+                result.put("total", devices.size());
+                result.put("message", String.format("找到 %d 条相关记录", devices.size()));
                 
-                // 打印第一条记录的详细信息（用于调试）
-                if (response.getList() != null && !response.getList().isEmpty()) {
-                    chinaRegistrationApi.printDeviceInfo(response.getList().get(0));
-                }
+                // 打印第一条记录的详细信息
+                chinaRegistrationApi.printDeviceInfo(devices.get(0));
             } else {
                 result.put("success", false);
-                result.put("message", "搜索失败，请检查API状态");
+                result.put("message", "未找到匹配的记录");
+                result.put("data", new ArrayList<>());
+                result.put("total", 0);
             }
             
             return ResponseEntity.ok(result);
@@ -99,217 +101,53 @@ public class ChinaRegistrationController {
     }
 
     /**
-     * 根据注册证号搜索医疗器械
+     * 获取所有数据
      */
-    @GetMapping("/search/registration")
-    @Operation(summary = "根据注册证号搜索", description = "根据注册证号搜索中国上市医疗器械")
-    public ResponseEntity<Map<String, Object>> searchByRegistrationNumber(
-            @Parameter(description = "注册证号") @RequestParam String registrationNumber,
-            @Parameter(description = "页码，从1开始") @RequestParam(defaultValue = "1") int page) {
-        
-        log.info("根据注册证号搜索医疗器械: {}, 页码: {}", registrationNumber, page);
+    @GetMapping("/all")
+    @Operation(summary = "获取所有数据", description = "获取文件中的所有医疗器械数据")
+    public ResponseEntity<Map<String, Object>> getAllDevices() {
+        log.info("获取所有医疗器械数据");
         
         Map<String, Object> result = new HashMap<>();
         
         try {
-            SearchParams params = new SearchParams();
-            params.setRegistrationNumberRemark(registrationNumber);
+            cn_registration_api.ChinaListedResponse response = chinaRegistrationApi.parseDataFromFile();
             
-            ChinaListedResponse response = chinaRegistrationApi.getChinaListedDevices(params, page);
-            
-            if (response != null) {
+            if (response != null && response.getList() != null) {
                 result.put("success", true);
                 result.put("data", response.getList());
-                result.put("total", response.getTotal());
-                result.put("page", page);
-                result.put("message", String.format("找到 %d 条相关记录", response.getTotal()));
+                result.put("total", response.getList().size());
+                result.put("message", String.format("共获取 %d 条记录", response.getList().size()));
+                result.put("statistics", chinaRegistrationApi.getDataStatistics());
             } else {
                 result.put("success", false);
-                result.put("message", "搜索失败，请检查API状态");
+                result.put("message", response != null ? response.getErrorMessage() : "获取数据失败");
+                result.put("data", new ArrayList<>());
+                result.put("total", 0);
             }
             
             return ResponseEntity.ok(result);
             
         } catch (Exception e) {
-            log.error("搜索注册证号失败: {}", e.getMessage(), e);
+            log.error("获取所有数据失败: {}", e.getMessage(), e);
             result.put("success", false);
-            result.put("message", "搜索异常: " + e.getMessage());
+            result.put("message", "获取数据异常: " + e.getMessage());
             return ResponseEntity.ok(result);
         }
     }
 
     /**
-     * 根据注册人名称搜索医疗器械
+     * 获取数据统计信息
      */
-    @GetMapping("/search/manufacturer")
-    @Operation(summary = "根据注册人搜索", description = "根据注册人名称搜索中国上市医疗器械")
-    public ResponseEntity<Map<String, Object>> searchByManufacturer(
-            @Parameter(description = "注册人名称") @RequestParam String manufacturer,
-            @Parameter(description = "页码，从1开始") @RequestParam(defaultValue = "1") int page) {
-        
-        log.info("根据注册人搜索医疗器械: {}, 页码: {}", manufacturer, page);
+    @GetMapping("/statistics")
+    @Operation(summary = "获取数据统计", description = "获取医疗器械数据的统计信息")
+    public ResponseEntity<Map<String, Object>> getStatistics() {
+        log.info("获取医疗器械数据统计");
         
         Map<String, Object> result = new HashMap<>();
         
         try {
-            SearchParams params = new SearchParams();
-            params.setManufacturerRe(manufacturer);
-            
-            ChinaListedResponse response = chinaRegistrationApi.getChinaListedDevices(params, page);
-            
-            if (response != null) {
-                result.put("success", true);
-                result.put("data", response.getList());
-                result.put("total", response.getTotal());
-                result.put("page", page);
-                result.put("message", String.format("找到 %d 条相关记录", response.getTotal()));
-            } else {
-                result.put("success", false);
-                result.put("message", "搜索失败，请检查API状态");
-            }
-            
-            return ResponseEntity.ok(result);
-            
-        } catch (Exception e) {
-            log.error("搜索注册人失败: {}", e.getMessage(), e);
-            result.put("success", false);
-            result.put("message", "搜索异常: " + e.getMessage());
-            return ResponseEntity.ok(result);
-        }
-    }
-
-    /**
-     * 根据管理类别获取医疗器械
-     */
-    @GetMapping("/category/{category}")
-    @Operation(summary = "根据管理类别查询", description = "根据管理类别（Ⅱ、Ⅲ）查询医疗器械")
-    public ResponseEntity<Map<String, Object>> getDevicesByCategory(
-            @Parameter(description = "管理类别（Ⅱ、Ⅲ）") @PathVariable String category,
-            @Parameter(description = "页码，从1开始") @RequestParam(defaultValue = "1") int page) {
-        
-        log.info("根据管理类别查询医疗器械: {}, 页码: {}", category, page);
-        
-        Map<String, Object> result = new HashMap<>();
-        
-        try {
-            SearchParams params = new SearchParams();
-            params.setCategory(category);
-            
-            ChinaListedResponse response = chinaRegistrationApi.getChinaListedDevices(params, page);
-            
-            if (response != null) {
-                result.put("success", true);
-                result.put("data", response.getList());
-                result.put("total", response.getTotal());
-                result.put("page", page);
-                result.put("category", category);
-                result.put("message", String.format("找到 %d 条 %s 类医疗器械", response.getTotal(), category));
-            } else {
-                result.put("success", false);
-                result.put("message", "查询失败，请检查API状态");
-            }
-            
-            return ResponseEntity.ok(result);
-            
-        } catch (Exception e) {
-            log.error("查询管理类别失败: {}", e.getMessage(), e);
-            result.put("success", false);
-            result.put("message", "查询异常: " + e.getMessage());
-            return ResponseEntity.ok(result);
-        }
-    }
-
-    /**
-     * 根据国产/进口类型获取医疗器械
-     */
-    @GetMapping("/type/{type}")
-    @Operation(summary = "根据类型查询", description = "根据国产/进口类型查询医疗器械")
-    public ResponseEntity<Map<String, Object>> getDevicesByType(
-            @Parameter(description = "类型（国产、进口）") @PathVariable String type,
-            @Parameter(description = "页码，从1开始") @RequestParam(defaultValue = "1") int page) {
-        
-        log.info("根据类型查询医疗器械: {}, 页码: {}", type, page);
-        
-        Map<String, Object> result = new HashMap<>();
-        
-        try {
-            SearchParams params = new SearchParams();
-            params.setType(type);
-            
-            ChinaListedResponse response = chinaRegistrationApi.getChinaListedDevices(params, page);
-            
-            if (response != null) {
-                result.put("success", true);
-                result.put("data", response.getList());
-                result.put("total", response.getTotal());
-                result.put("page", page);
-                result.put("type", type);
-                result.put("message", String.format("找到 %d 条 %s 医疗器械", response.getTotal(), type));
-            } else {
-                result.put("success", false);
-                result.put("message", "查询失败，请检查API状态");
-            }
-            
-            return ResponseEntity.ok(result);
-            
-        } catch (Exception e) {
-            log.error("查询类型失败: {}", e.getMessage(), e);
-            result.put("success", false);
-            result.put("message", "查询异常: " + e.getMessage());
-            return ResponseEntity.ok(result);
-        }
-    }
-
-    /**
-     * 高级搜索
-     */
-    @PostMapping("/search/advanced")
-    @Operation(summary = "高级搜索", description = "使用多个条件进行高级搜索")
-    public ResponseEntity<Map<String, Object>> advancedSearch(
-            @RequestBody SearchParams searchParams,
-            @Parameter(description = "页码，从1开始") @RequestParam(defaultValue = "1") int page) {
-        
-        log.info("高级搜索医疗器械，页码: {}", page);
-        
-        Map<String, Object> result = new HashMap<>();
-        
-        try {
-            ChinaListedResponse response = chinaRegistrationApi.getChinaListedDevices(searchParams, page);
-            
-            if (response != null) {
-                result.put("success", true);
-                result.put("data", response.getList());
-                result.put("total", response.getTotal());
-                result.put("page", page);
-                result.put("searchParams", searchParams);
-                result.put("message", String.format("找到 %d 条相关记录", response.getTotal()));
-            } else {
-                result.put("success", false);
-                result.put("message", "搜索失败，请检查API状态");
-            }
-            
-            return ResponseEntity.ok(result);
-            
-        } catch (Exception e) {
-            log.error("高级搜索失败: {}", e.getMessage(), e);
-            result.put("success", false);
-            result.put("message", "搜索异常: " + e.getMessage());
-            return ResponseEntity.ok(result);
-        }
-    }
-
-    /**
-     * 获取API统计信息
-     */
-    @GetMapping("/stats")
-    @Operation(summary = "获取API统计", description = "获取API使用统计信息")
-    public ResponseEntity<Map<String, Object>> getApiStats() {
-        log.info("获取API统计信息");
-        
-        Map<String, Object> result = new HashMap<>();
-        
-        try {
-            Map<String, Object> stats = chinaRegistrationApi.getApiStats();
+            Map<String, Object> stats = chinaRegistrationApi.getDataStatistics();
             result.put("success", true);
             result.put("data", stats);
             result.put("message", "统计信息获取成功");
@@ -317,7 +155,7 @@ public class ChinaRegistrationController {
             return ResponseEntity.ok(result);
             
         } catch (Exception e) {
-            log.error("获取API统计失败: {}", e.getMessage(), e);
+            log.error("获取统计信息失败: {}", e.getMessage(), e);
             result.put("success", false);
             result.put("message", "获取统计信息异常: " + e.getMessage());
             return ResponseEntity.ok(result);
@@ -325,50 +163,36 @@ public class ChinaRegistrationController {
     }
 
     /**
-     * 批量获取数据（用于数据收集）
+     * 导出数据为CSV文件
      */
-    @GetMapping("/batch")
-    @Operation(summary = "批量获取数据", description = "批量获取医疗器械数据，用于数据收集")
-    public ResponseEntity<Map<String, Object>> batchGetDevices(
-            @Parameter(description = "最大页数") @RequestParam(defaultValue = "5") int maxPages,
-            @Parameter(description = "产品名称关键词") @RequestParam(required = false) String productName,
-            @Parameter(description = "管理类别") @RequestParam(required = false) String category,
-            @Parameter(description = "国产/进口") @RequestParam(required = false) String type) {
-        
-        log.info("批量获取医疗器械数据，最大页数: {}", maxPages);
+    @GetMapping("/export/csv")
+    @Operation(summary = "导出CSV文件", description = "将医疗器械数据导出为CSV文件")
+    public ResponseEntity<Map<String, Object>> exportToCsv() {
+        log.info("导出医疗器械数据为CSV文件");
         
         Map<String, Object> result = new HashMap<>();
         
         try {
-            SearchParams params = new SearchParams();
-            if (productName != null) params.setProductName(productName);
-            if (category != null) params.setCategory(category);
-            if (type != null) params.setType(type);
+            String csvFilePath = chinaRegistrationApi.exportToCsv();
             
-            ChinaListedResponse response = chinaRegistrationApi.getAllChinaListedDevices(params, maxPages);
-            
-            if (response != null) {
+            if (csvFilePath != null) {
                 result.put("success", true);
-                result.put("totalRecords", response.getList() != null ? response.getList().size() : 0);
-                result.put("maxPages", maxPages);
-                result.put("searchParams", params);
-                result.put("message", String.format("批量获取完成，共获取 %d 条记录", 
-                    response.getList() != null ? response.getList().size() : 0));
+                result.put("filePath", csvFilePath);
+                result.put("absolutePath", new java.io.File(csvFilePath).getAbsolutePath());
+                result.put("message", "CSV文件导出成功");
                 
-                // 不返回具体数据，只返回统计信息，避免响应过大
-                result.put("sampleData", response.getList() != null && !response.getList().isEmpty() ? 
-                    response.getList().get(0) : null);
+                log.info("CSV文件导出成功: {}", csvFilePath);
             } else {
                 result.put("success", false);
-                result.put("message", "批量获取失败，请检查API状态");
+                result.put("message", "CSV文件导出失败");
             }
             
             return ResponseEntity.ok(result);
             
         } catch (Exception e) {
-            log.error("批量获取数据失败: {}", e.getMessage(), e);
+            log.error("CSV文件导出失败: {}", e.getMessage(), e);
             result.put("success", false);
-            result.put("message", "批量获取异常: " + e.getMessage());
+            result.put("message", "CSV文件导出异常: " + e.getMessage());
             return ResponseEntity.ok(result);
         }
     }

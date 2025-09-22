@@ -32,7 +32,7 @@ public class ChinaRegistrationApiTest {
         log.info("API连接测试结果: {}", connected ? "成功" : "失败");
         
         // 打印API统计信息
-        log.info("API统计信息: {}", chinaRegistrationApi.getApiStats());
+        log.info("API统计信息: {}", chinaRegistrationApi.getDataStatistics());
     }
 
     /**
