@@ -306,7 +306,7 @@ show_next_steps() {
     echo "   - PORT: 22"
     echo
     echo "2. 克隆您的项目到 /opt/AAAA"
-    echo "   git clone https://github.com/yourusername/AAAA.git /opt/AAAA"
+    echo "   git clone https://github.com/DOCWHOI/Eveindex1.0.git"
     echo
     echo "3. 推送代码到main分支触发自动部署"
     echo

@@ -53,7 +53,7 @@ sudo mkdir -p /opt/AAAA
 sudo chown -R $USER:$USER /opt/AAAA
 
 # 克隆项目
-git clone https://github.com/yourusername/AAAA.git /opt/AAAA
+git clone https://github.com/DOCWHOI/Eveindex1.0.git /opt/AAAA
 ```
 
 ### 3. 部署流程
